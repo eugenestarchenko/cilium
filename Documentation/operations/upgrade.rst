@@ -327,7 +327,13 @@ Annotations:
 * Egress Gateway policies now drop matching traffic when no
   gateway nodes can be found. Previously, traffic would be allowed without
   being rerouted towards an Egress Gateway.
-
+* A bug that prevented dual-stack clusters (clusters that use both IPv4
+  and IPv6 addresses) from referencing the total address space of each IP
+  family individually ("0.0.0.0/0" and "::/0") in network policies has been
+  fixed. If operators of dual-stack clusters need to roll back from 1.14 (for
+  example, because of a failed upgrade) existing connections to
+  endpoints external to the cluster may break, though any new connections will
+  work correctly. Upgrading to 1.14 does not cause this problem.
 
 Removed Options
 ~~~~~~~~~~~~~~~
