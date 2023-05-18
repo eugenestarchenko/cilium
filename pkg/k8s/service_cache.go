@@ -14,6 +14,7 @@ import (
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/ip"
+	"github.com/cilium/cilium/pkg/k8s/resource"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	"github.com/cilium/cilium/pkg/loadbalancer"
 	"github.com/cilium/cilium/pkg/lock"
@@ -57,11 +58,14 @@ type ServiceEvent struct {
 	// Service is the service structure
 	Service *Service
 
-	// OldService is the service structure
+	// OldService is the old service structure
 	OldService *Service
 
 	// Endpoints is the endpoints structured correlated with the service
 	Endpoints *Endpoints
+
+	// OldEndpoints is old endpoints structure.
+	OldEndpoints *Endpoints
 
 	// SWG provides a mechanism to detect if a service was synchronized with
 	// the datapath.
@@ -273,7 +277,7 @@ func (s *ServiceCache) DeleteService(k8sSvc *slim_corev1.Service, swg *lock.Stop
 // ServiceCache. Returns the ServiceID unless the Kubernetes endpoints could not
 // be parsed and a bool to indicate whether the endpoints was changed in the
 // cache or not.
-func (s *ServiceCache) UpdateEndpoints(newEndpoints *Endpoints, swg *lock.StoppableWaitGroup) (ServiceID, *Endpoints) {
+func (s *ServiceCache) UpdateEndpoints(key resource.Key, newEndpoints *Endpoints, cache map[resource.Key]*Endpoints, swg *lock.StoppableWaitGroup) (ServiceID, *Endpoints) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -291,17 +295,25 @@ func (s *ServiceCache) UpdateEndpoints(newEndpoints *Endpoints, swg *lock.Stoppa
 
 	eps.Upsert(esID.EndpointSliceName, newEndpoints)
 
+	oldEPs, _ := cache[key]
+	// cache is optional as it's only needed for Agents (not for Operator). If
+	// it's nil, then we don't expect to use oldEPs anyway.
+	if cache != nil {
+		cache[key] = newEndpoints
+	}
+
 	// Check if the corresponding Endpoints resource is already available
 	svc, ok := s.services[esID.ServiceID]
 	endpoints, serviceReady := s.correlateEndpoints(esID.ServiceID)
 	if ok && serviceReady {
 		swg.Add()
 		s.Events <- ServiceEvent{
-			Action:    UpdateService,
-			ID:        esID.ServiceID,
-			Service:   svc,
-			Endpoints: endpoints,
-			SWG:       swg,
+			Action:       UpdateService,
+			ID:           esID.ServiceID,
+			Service:      svc,
+			Endpoints:    endpoints,
+			OldEndpoints: oldEPs,
+			SWG:          swg,
 		}
 	}
 
@@ -310,9 +322,11 @@ func (s *ServiceCache) UpdateEndpoints(newEndpoints *Endpoints, swg *lock.Stoppa
 
 // DeleteEndpoints parses a Kubernetes endpoints and removes it from the
 // ServiceCache
-func (s *ServiceCache) DeleteEndpoints(svcID EndpointSliceID, swg *lock.StoppableWaitGroup) ServiceID {
+func (s *ServiceCache) DeleteEndpoints(key resource.Key, cache map[resource.Key]*Endpoints, svcID EndpointSliceID, swg *lock.StoppableWaitGroup) ServiceID {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+
+	delete(cache, key)
 
 	svc, serviceOK := s.services[svcID.ServiceID]
 	isEmpty := s.endpoints[svcID.ServiceID].Delete(svcID.EndpointSliceName)

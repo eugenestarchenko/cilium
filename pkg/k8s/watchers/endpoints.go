@@ -43,6 +43,7 @@ func (k *K8sWatcher) endpointsInit() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	events := k.resources.Endpoints.Events(ctx)
+	cache := make(map[resource.Key]*k8s.Endpoints)
 	go func() {
 		for {
 			select {
@@ -57,11 +58,11 @@ func (k *K8sWatcher) endpointsInit() {
 					synced.Store(true)
 				case resource.Upsert:
 					k.K8sEventReceived(apiGroup, metric, resources.MetricUpdate, true, false)
-					k.updateEndpoint(event.Object, swg)
+					k.updateEndpoint(event.Key, event.Object, cache, swg)
 					k.K8sEventProcessed(metric, resources.MetricUpdate, true)
 				case resource.Delete:
 					k.K8sEventReceived(apiGroup, metric, resources.MetricDelete, true, false)
-					k.K8sSvcCache.DeleteEndpoints(event.Object.EndpointSliceID, swg)
+					k.K8sSvcCache.DeleteEndpoints(event.Key, cache, event.Object.EndpointSliceID, swg)
 					k.K8sEventProcessed(metric, resources.MetricDelete, true)
 				}
 				event.Done(nil)
@@ -70,8 +71,8 @@ func (k *K8sWatcher) endpointsInit() {
 	}()
 }
 
-func (k *K8sWatcher) updateEndpoint(eps *k8s.Endpoints, swgEps *lock.StoppableWaitGroup) {
-	k.K8sSvcCache.UpdateEndpoints(eps, swgEps)
+func (k *K8sWatcher) updateEndpoint(key resource.Key, eps *k8s.Endpoints, cache map[resource.Key]*k8s.Endpoints, swgEps *lock.StoppableWaitGroup) {
+	k.K8sSvcCache.UpdateEndpoints(key, eps, cache, swgEps)
 	if option.Config.BGPAnnounceLBIP {
 		k.bgpSpeakerManager.OnUpdateEndpoints(eps)
 	}

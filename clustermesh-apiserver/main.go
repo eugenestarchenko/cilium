@@ -215,7 +215,7 @@ func readMockFile(ctx context.Context, path string, backend kvstore.BackendOpera
 			if err != nil {
 				log.WithError(err).WithField("line", line).Warning("Unable to unmarshal Endpoints")
 			} else {
-				operatorWatchers.K8sSvcCache.UpdateEndpoints(k8s.ParseEndpoints(&endpoints), nil)
+				operatorWatchers.K8sSvcCache.UpdateEndpoints(resource.Key{}, k8s.ParseEndpoints(&endpoints), nil, nil)
 			}
 		default:
 			log.Warningf("Unknown line in mockfile %s: %s", path, line)

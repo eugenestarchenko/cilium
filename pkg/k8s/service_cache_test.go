@@ -14,6 +14,7 @@ import (
 	"github.com/cilium/cilium/pkg/checker"
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	fakeDatapath "github.com/cilium/cilium/pkg/datapath/fake"
+	"github.com/cilium/cilium/pkg/k8s/resource"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_discovery_v1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/discovery/v1"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
@@ -137,10 +138,10 @@ func (s *K8sSuite) TestServiceCacheEndpoints(c *check.C) {
 	})
 
 	updateEndpoints := func(svcCache *ServiceCache, swgEps *lock.StoppableWaitGroup) {
-		svcCache.UpdateEndpoints(endpoints, swgEps)
+		svcCache.UpdateEndpoints(resource.Key{}, endpoints, nil, swgEps)
 	}
 	deleteEndpoints := func(svcCache *ServiceCache, swgEps *lock.StoppableWaitGroup) {
-		svcCache.DeleteEndpoints(endpoints.EndpointSliceID, swgEps)
+		svcCache.DeleteEndpoints(resource.Key{}, nil, endpoints.EndpointSliceID, swgEps)
 	}
 
 	testServiceCache(c, updateEndpoints, deleteEndpoints)
@@ -173,10 +174,10 @@ func (s *K8sSuite) TestServiceCacheEndpointSlice(c *check.C) {
 	})
 
 	updateEndpoints := func(svcCache *ServiceCache, swgEps *lock.StoppableWaitGroup) {
-		svcCache.UpdateEndpoints(endpoints, swgEps)
+		svcCache.UpdateEndpoints(resource.Key{}, endpoints, nil, swgEps)
 	}
 	deleteEndpoints := func(svcCache *ServiceCache, swgEps *lock.StoppableWaitGroup) {
-		svcCache.DeleteEndpoints(endpoints.EndpointSliceID, swgEps)
+		svcCache.DeleteEndpoints(resource.Key{}, nil, endpoints.EndpointSliceID, swgEps)
 	}
 
 	testServiceCache(c, updateEndpoints, deleteEndpoints)
@@ -397,7 +398,7 @@ func (s *K8sSuite) TestExternalServiceMerging(c *check.C) {
 	})
 
 	swgEps := lock.NewStoppableWaitGroup()
-	svcCache.UpdateEndpoints(endpoints, swgEps)
+	svcCache.UpdateEndpoints(resource.Key{}, endpoints, nil, swgEps)
 
 	// The service should be ready as both service and endpoints have been
 	// imported
@@ -798,7 +799,7 @@ func (s *K8sSuite) TestClusterServiceMerging(c *check.C) {
 		},
 	})
 
-	svcCache.UpdateEndpoints(endpoints, swgEps)
+	svcCache.UpdateEndpoints(resource.Key{}, endpoints, nil, swgEps)
 
 	svcCache.MergeClusterServiceUpdate(&serviceStore.ClusterService{
 		Cluster:   option.Config.ClusterName,
@@ -996,9 +997,9 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSlice(c *check.C) {
 	}
 
 	swgEps := lock.NewStoppableWaitGroup()
-	svcCache.UpdateEndpoints(k8sEndpointSlice1, swgEps)
-	svcCache.UpdateEndpoints(k8sEndpointSlice2, swgEps)
-	svcCache.UpdateEndpoints(k8sEndpointSlice3, swgEps)
+	svcCache.UpdateEndpoints(resource.Key{}, k8sEndpointSlice1, nil, swgEps)
+	svcCache.UpdateEndpoints(resource.Key{}, k8sEndpointSlice2, nil, swgEps)
+	svcCache.UpdateEndpoints(resource.Key{}, k8sEndpointSlice3, nil, swgEps)
 
 	// The service should be ready as both service and endpoints have been
 	// imported for k8sEndpointSlice1
@@ -1059,7 +1060,7 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSlice(c *check.C) {
 	}, 2*time.Second), check.IsNil)
 
 	// Deleting the k8sEndpointSlice2 will result in a service update event
-	svcCache.DeleteEndpoints(k8sEndpointSlice2.EndpointSliceID, swgEps)
+	svcCache.DeleteEndpoints(resource.Key{}, nil, k8sEndpointSlice2.EndpointSliceID, swgEps)
 	c.Assert(testutils.WaitUntil(func() bool {
 		event := <-svcCache.Events
 		defer event.SWG.Done()
@@ -1072,7 +1073,7 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSlice(c *check.C) {
 	c.Assert(ready, check.Equals, true)
 	c.Assert(endpoints.String(), check.Equals, "2.2.2.2:8080/TCP")
 
-	svcCache.DeleteEndpoints(k8sEndpointSlice1.EndpointSliceID, swgEps)
+	svcCache.DeleteEndpoints(resource.Key{}, nil, k8sEndpointSlice1.EndpointSliceID, swgEps)
 	c.Assert(testutils.WaitUntil(func() bool {
 		event := <-svcCache.Events
 		defer event.SWG.Done()
@@ -1086,7 +1087,7 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSlice(c *check.C) {
 	c.Assert(endpoints.String(), check.Equals, "")
 
 	// Reinserting the endpoints should re-match with the still existing service
-	svcCache.UpdateEndpoints(k8sEndpointSlice1, swgEps)
+	svcCache.UpdateEndpoints(resource.Key{}, k8sEndpointSlice1, nil, swgEps)
 	c.Assert(testutils.WaitUntil(func() bool {
 		event := <-svcCache.Events
 		defer event.SWG.Done()
@@ -1111,7 +1112,7 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSlice(c *check.C) {
 
 	// Deleting the endpoints will not emit an event as the notification
 	// was sent out when the service was deleted.
-	svcCache.DeleteEndpoints(k8sEndpointSlice1.EndpointSliceID, swgEps)
+	svcCache.DeleteEndpoints(resource.Key{}, nil, k8sEndpointSlice1.EndpointSliceID, swgEps)
 	time.Sleep(100 * time.Millisecond)
 	select {
 	case <-svcCache.Events:
@@ -1214,8 +1215,8 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSliceSameAddress(c *check.C) {
 	}
 
 	swgEps := lock.NewStoppableWaitGroup()
-	svcCache.UpdateEndpoints(k8sEndpointSlice1, swgEps)
-	svcCache.UpdateEndpoints(k8sEndpointSlice2, swgEps)
+	svcCache.UpdateEndpoints(resource.Key{}, k8sEndpointSlice1, nil, swgEps)
+	svcCache.UpdateEndpoints(resource.Key{}, k8sEndpointSlice2, nil, swgEps)
 
 	// The service should be ready as both service and endpoints have been
 	// imported for k8sEndpointSlice1
@@ -1276,7 +1277,7 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSliceSameAddress(c *check.C) {
 	}, 2*time.Second), check.IsNil)
 
 	// Deleting the k8sEndpointSlice2 will result in a service update event
-	svcCache.DeleteEndpoints(k8sEndpointSlice2.EndpointSliceID, swgEps)
+	svcCache.DeleteEndpoints(resource.Key{}, nil, k8sEndpointSlice2.EndpointSliceID, swgEps)
 	c.Assert(testutils.WaitUntil(func() bool {
 		event := <-svcCache.Events
 		defer event.SWG.Done()
@@ -1289,7 +1290,7 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSliceSameAddress(c *check.C) {
 	c.Assert(ready, check.Equals, true)
 	c.Assert(endpoints.String(), check.Equals, "2.2.2.2:8080/TCP")
 
-	svcCache.DeleteEndpoints(k8sEndpointSlice1.EndpointSliceID, swgEps)
+	svcCache.DeleteEndpoints(resource.Key{}, nil, k8sEndpointSlice1.EndpointSliceID, swgEps)
 	c.Assert(testutils.WaitUntil(func() bool {
 		event := <-svcCache.Events
 		defer event.SWG.Done()
@@ -1303,7 +1304,7 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSliceSameAddress(c *check.C) {
 	c.Assert(endpoints.String(), check.Equals, "")
 
 	// Reinserting the endpoints should re-match with the still existing service
-	svcCache.UpdateEndpoints(k8sEndpointSlice1, swgEps)
+	svcCache.UpdateEndpoints(resource.Key{}, k8sEndpointSlice1, nil, swgEps)
 	c.Assert(testutils.WaitUntil(func() bool {
 		event := <-svcCache.Events
 		defer event.SWG.Done()
@@ -1328,7 +1329,7 @@ func (s *K8sSuite) TestServiceCacheWith2EndpointSliceSameAddress(c *check.C) {
 
 	// Deleting the endpoints will not emit an event as the notification
 	// was sent out when the service was deleted.
-	svcCache.DeleteEndpoints(k8sEndpointSlice1.EndpointSliceID, swgEps)
+	svcCache.DeleteEndpoints(resource.Key{}, nil, k8sEndpointSlice1.EndpointSliceID, swgEps)
 	time.Sleep(100 * time.Millisecond)
 	select {
 	case <-svcCache.Events:
@@ -1413,7 +1414,7 @@ func (s *K8sSuite) TestServiceEndpointFiltering(c *check.C) {
 	// Now update service and endpointslice. This should result in the service
 	// update with 2.2.2.2 endpoint due to the zone filtering.
 	svcID0 := svcCache.UpdateService(k8sSvc, swg)
-	svcID1, eps := svcCache.UpdateEndpoints(k8sEndpointSlice, swg)
+	svcID1, eps := svcCache.UpdateEndpoints(resource.Key{}, k8sEndpointSlice, nil, swg)
 	c.Assert(svcID0, check.Equals, svcID1)
 	c.Assert(len(eps.Backends), check.Equals, 1)
 	c.Assert(testutils.WaitUntil(func() bool {
@@ -1481,7 +1482,7 @@ func (s *K8sSuite) TestServiceEndpointFiltering(c *check.C) {
 	for _, be := range k8sEndpointSlice.Backends {
 		be.HintsForZones = nil
 	}
-	svcID1, _ = svcCache.UpdateEndpoints(k8sEndpointSlice, swg)
+	svcID1, _ = svcCache.UpdateEndpoints(resource.Key{}, k8sEndpointSlice, nil, swg)
 	c.Assert(testutils.WaitUntil(func() bool {
 		event := <-svcCache.Events
 		c.Assert(event.Action, check.Equals, UpdateService)

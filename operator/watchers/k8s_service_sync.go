@@ -218,10 +218,10 @@ func StartSynchronizingServices(ctx context.Context, wg *sync.WaitGroup, cfg Ser
 					}
 				case resource.Upsert:
 					k8sEventMetric(endpointMetric, resources.MetricUpdate)
-					K8sSvcCache.UpdateEndpoints(ev.Object, swg)
+					K8sSvcCache.UpdateEndpoints(ev.Key, ev.Object, nil, swg)
 				case resource.Delete:
 					k8sEventMetric(endpointMetric, resources.MetricDelete)
-					K8sSvcCache.DeleteEndpoints(ev.Object.EndpointSliceID, swg)
+					K8sSvcCache.DeleteEndpoints(ev.Key, nil, ev.Object.EndpointSliceID, swg)
 				}
 				ev.Done(nil)
 			}

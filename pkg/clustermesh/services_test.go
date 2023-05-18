@@ -22,6 +22,7 @@ import (
 	"github.com/cilium/cilium/pkg/identity/cache"
 	"github.com/cilium/cilium/pkg/ipcache"
 	"github.com/cilium/cilium/pkg/k8s"
+	"github.com/cilium/cilium/pkg/k8s/resource"
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	"github.com/cilium/cilium/pkg/kvstore"
@@ -191,12 +192,12 @@ func (s *ClusterMeshServicesTestSuite) TestClusterMeshServicesGlobal(c *C) {
 	})
 
 	swgEps := lock.NewStoppableWaitGroup()
-	s.svcCache.UpdateEndpoints(k8sEndpoints, swgEps)
+	s.svcCache.UpdateEndpoints(resource.Key{}, k8sEndpoints, nil, swgEps)
 	s.expectEvent(c, k8s.UpdateService, svcID, func(event k8s.ServiceEvent) bool {
 		return event.Endpoints.Backends[cmtypes.MustParseAddrCluster("30.0.185.196")] != nil
 	})
 
-	s.svcCache.DeleteEndpoints(k8sEndpoints.EndpointSliceID, swgEps)
+	s.svcCache.DeleteEndpoints(resource.Key{}, nil, k8sEndpoints.EndpointSliceID, swgEps)
 	s.expectEvent(c, k8s.UpdateService, svcID, func(event k8s.ServiceEvent) bool {
 		return event.Endpoints.Backends[cmtypes.MustParseAddrCluster("30.0.185.196")] == nil
 	})
