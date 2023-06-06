@@ -366,8 +366,7 @@ jobs:
           MASQ=""
           if [ "${{ matrix.kpr }}" == "strict" ]; then
             # BPF-masq requires KPR=strict.
-            # Disable IPv6 until https://github.com/cilium/cilium/issues/14350 has been resolved
-            MASQ="--helm-set=bpf.masquerade=true --helm-set=enableIPv6Masquerade=false"
+            MASQ="--helm-set=bpf.masquerade=true"
           fi
           EGRESS_GATEWAY=""
           if [ "${{ matrix.egress-gateway }}" == "true" ]; then
