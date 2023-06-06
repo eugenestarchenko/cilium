@@ -84,7 +84,7 @@ contributors across the globe, there is almost always someone available to help.
 | authentication.mutual.spire.install.server.labels | object | `{}` | SPIRE server labels |
 | authentication.mutual.spire.install.server.service | object | `{"annotations":{},"labels":{},"type":"ClusterIP"}` | SPIRE server service configuration |
 | authentication.mutual.spire.install.server.serviceAccount | object | `{"create":true,"name":"spire-server"}` | SPIRE server service account |
-| authentication.mutual.spire.serverAddress | string | `"spire-server.cilium-spire.svc:8081"` | SPIRE server address |
+| authentication.mutual.spire.serverAddress | string | `nil` | SPIRE server address used by Cilium Operator  As Cilium Operator is running in host network, please adjust operator.dnsPolicy to ClusterFirstWithHostNet if DNS resolution is required.  Example values: 10.0.0.1:8081, spire-server.cilium-spire.svc:8081 |
 | authentication.mutual.spire.trustDomain | string | `"spiffe.cilium"` | SPIFFE trust domain to use for fetching certificates |
 | autoDirectNodeRoutes | bool | `false` | Enable installation of PodCIDR routes between worker nodes if worker nodes share a common L2 network segment. |
 | azure.enabled | bool | `false` | Enable Azure integration. Note that this is incompatible with AKS clusters created in BYOCNI mode: use AKS BYOCNI integration (`aksbyocni.enabled`) instead. |
