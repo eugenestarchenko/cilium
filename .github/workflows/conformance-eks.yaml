@@ -65,13 +65,12 @@ concurrency:
 
 env:
   clusterName: ${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}
-  region: us-east-2
   # renovate: datasource=github-releases depName=cilium/cilium-cli
   cilium_cli_version: v0.14.5
   cilium_cli_ci_version:
   check_url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-  eksctl_version: v0.122.0
-  kubectl_version: v1.23.6
+  eksctl_version: v0.143.0
+  kubectl_version: v1.27.2
 
 jobs:
   check_changes:
@@ -112,31 +111,14 @@ jobs:
             src:
               - '!(test|Documentation)/**'
 
-  # This job is skipped when the workflow was triggered with the generic `/test`
-  # trigger if the only modified files were under `test/` or `Documentation/`.
-  installation-and-connectivity:
-    name: "Installation and Connectivity Test"
-    needs: check_changes
-    if: |
-      (github.event_name == 'issue_comment' && (
-        github.event.comment.body == '/ci-eks' ||
-        (github.event.comment.body == '/test' && needs.check_changes.outputs.tested == 'true')
-      )) ||
-      github.event_name == 'schedule' ||
-      github.event_name == 'pull_request'
+  setup-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      job_name: "Installation and Connectivity Test"
+    needs: check_changes
+    name: Set commit status
+    outputs:
+      sha: ${{ steps.vars.outputs.sha }}
+      owner: ${{ steps.vars.outputs.owner }}
     steps:
-      - name: Checkout main branch to access local actions
-        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-      - name: Set Environment Variables
-        uses: ./.github/actions/set-env-variables
-
       - name: Set up job variables
         id: vars
         run: |
@@ -151,7 +133,80 @@ jobs:
             SHA=${{ github.sha }}
             OWNER=${{ github.sha }}
           fi
+          echo sha=${SHA} >> $GITHUB_OUTPUT
+          echo owner=${OWNER} >> $GITHUB_OUTPUT
 
+      - name: Set commit status to pending
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+        with:
+          authToken: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ steps.vars.outputs.sha }}
+          context: ${{ github.workflow }}
+          description: Connectivity test in progress...
+          state: pending
+          target_url: ${{ env.check_url }}
+
+  skip-test-run:
+    # If the modified files are not relevant for this test then we can skip
+    # this test and mark it as successful.
+    if: github.event.comment.body == '/test' && needs.check_changes.outputs.tested == 'false'
+    runs-on: ubuntu-latest
+    needs: setup-report
+    name: Set commit status to success (skipped)
+    steps:
+      - name: Set commit status to success
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+        with:
+          authToken: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ needs.setup-report.outputs.sha }}
+          context: ${{ github.workflow }}
+          description: Connectivity test skipped
+          state: success
+          target_url: ${{ env.check_url }}
+
+  # This job is skipped when the workflow was triggered with the generic `/test`
+  # trigger if the only modified files were under `test/` or `Documentation/`.
+  installation-and-connectivity:
+    name: "Installation and Connectivity Test"
+    needs: [check_changes, setup-report]
+    if: |
+      (github.event_name == 'issue_comment' && (
+        github.event.comment.body == '/ci-eks' ||
+        (github.event.comment.body == '/test' && needs.check_changes.outputs.tested == 'true')
+      )) ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      job_name: "Installation and Connectivity Test"
+    strategy:
+      matrix:
+        k8s:
+          - version: 1.23
+            region: eu-central-1
+          - version: 1.24
+            region: us-west-2
+          - version: 1.25
+            region: ap-northeast-1
+          - version: 1.26
+            region: ca-central-1
+          - version: 1.27
+            region: eu-north-1
+
+    steps:
+      - name: Checkout main branch to access local actions
+        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Set Environment Variables
+        uses: ./.github/actions/set-env-variables
+
+      - name: Set up job variables
+        id: vars
+        run: |
+          SHA="${{ needs.setup-report.outputs.sha }}"
           CILIUM_INSTALL_DEFAULTS="--cluster-name=${{ env.clusterName }} \
             --chart-directory=install/kubernetes/cilium \
             --helm-set=image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/cilium-ci \
@@ -214,14 +269,15 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_PR_SA_ID }}
           aws-secret-access-key: ${{ secrets.AWS_PR_SA_KEY }}
-          aws-region: ${{ env.region }}
+          aws-region: ${{ matrix.k8s.region }}
 
       - name: Create EKS cluster
         uses: ./.github/actions/setup-eks-cluster
         with:
           cluster_name: ${{ env.clusterName }}
-          region: ${{ env.region }}
+          region: ${{ matrix.k8s.region }}
           owner: "${{ steps.vars.outputs.owner }}"
+          version: ${{ matrix.k8s.version }}
 
       # This is a workaround for flake #16938.
       - name: Remove AWS-CNI
@@ -262,10 +318,10 @@ jobs:
         run: |
           mkdir -p cilium-junits
 
-      - name: Run connectivity test
+      - name: Run connectivity test ${{ matrix.k8s.version }}
         run: |
           cilium connectivity test ${{ steps.vars.outputs.connectivity_test_defaults }} \
-          --junit-file "cilium-junits/${{ env.job_name }} - 1.xml" --junit-property github_job_step="Run connectivity test"
+          --junit-file "cilium-junits/${{ env.job_name }} - 1.xml" --junit-property github_job_step="Run connectivity test ${{ matrix.k8s.version }}"
 
       - name: Clean up Cilium
         run: |
@@ -292,10 +348,10 @@ jobs:
           sleep 10s
           [[ $(pgrep -f "cilium.*hubble.*port-forward|kubectl.*port-forward.*hubble-relay" | wc -l) == 2 ]]
 
-      - name: Run connectivity test with IPSec
+      - name: Run connectivity test with IPSec ${{ matrix.k8s.version }}
         run: |
           cilium connectivity test ${{ steps.vars.outputs.connectivity_test_defaults }} --force-deploy \
-          --junit-file "cilium-junits/${{ env.job_name }} - 2.xml" --junit-property github_job_step="Run connectivity test with IPSec"
+          --junit-file "cilium-junits/${{ env.job_name }} - 2.xml" --junit-property github_job_step="Run connectivity test with IPSec ${{ matrix.k8s.version }}"
 
       - name: Post-test information gathering
         if: ${{ !success() }}
@@ -308,7 +364,7 @@ jobs:
       - name: Clean up EKS
         if: ${{ always() }}
         run: |
-          eksctl delete cluster --name ${{ env.clusterName }}
+          eksctl delete cluster --name ${{ env.clusterName }} --region ${{ matrix.k8s.region }}
         shell: bash {0} # Disable default fail-fast behaviour so that all commands run independently
 
       - name: Upload artifacts
@@ -333,35 +389,48 @@ jobs:
         with:
           junit-directory: "cilium-junits"
 
-      - name: Set commit status to success
-        if: ${{ success() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+  report-success:
+    runs-on: ubuntu-latest
+    needs: [setup-report, installation-and-connectivity]
+    name: Set commit status to success
+    if: ${{ success() }}
+    steps:
+      - uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
-          sha: ${{ steps.vars.outputs.sha }}
+          sha: ${{ needs.setup-report.outputs.sha }}
           context: ${{ github.workflow }}
           description: Connectivity test successful
           state: success
           target_url: ${{ env.check_url }}
 
-      - name: Set commit status to failure
-        if: ${{ failure() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+  report-failure:
+    runs-on: ubuntu-latest
+    needs: [setup-report, installation-and-connectivity]
+    name: Set commit status to failure
+    if: ${{ failure() }}
+    steps:
+      - uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
-          sha: ${{ steps.vars.outputs.sha }}
+          sha: ${{ needs.setup-report.outputs.sha }}
           context: ${{ github.workflow }}
           description: Connectivity test failed
           state: failure
           target_url: ${{ env.check_url }}
 
-      - name: Set commit status to cancelled
-        if: ${{ cancelled() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+  report-cancelled:
+    runs-on: ubuntu-latest
+    needs: [setup-report, installation-and-connectivity]
+    name: Set commit status to cancelled
+    if: ${{ cancelled() }}
+    steps:
+      - uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
-          sha: ${{ steps.vars.outputs.sha }}
+          sha: ${{ needs.setup-report.outputs.sha }}
           context: ${{ github.workflow }}
           description: Connectivity test cancelled
           state: error
           target_url: ${{ env.check_url }}
+

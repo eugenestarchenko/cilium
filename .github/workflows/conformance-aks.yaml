@@ -67,7 +67,6 @@ concurrency:
 
 env:
   name: ${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}
-  location: westeurope
   cost_reduction: --node-vm-size Standard_B2s --node-osdisk-size 30
   # renovate: datasource=github-releases depName=cilium/cilium-cli
   cilium_cli_version: v0.14.5
@@ -113,31 +112,14 @@ jobs:
             src:
               - '!(test|Documentation)/**'
 
-  # This job is skipped when the workflow was triggered with the generic `/test`
-  # trigger if the only modified files were under `test/` or `Documentation/`.
-  installation-and-connectivity:
-    name: "Installation and Connectivity Test"
-    needs: check_changes
-    if: |
-      (github.event_name == 'issue_comment' && (
-        github.event.comment.body == '/ci-aks' ||
-        (github.event.comment.body == '/test' && needs.check_changes.outputs.tested == 'true')
-      )) ||
-      github.event_name == 'schedule' ||
-      github.event_name == 'pull_request'
+  setup-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      job_name: "Installation and Connectivity Test"
+    needs: check_changes
+    name: Set commit status
+    outputs:
+      sha: ${{ steps.vars.outputs.sha }}
+      owner: ${{ steps.vars.outputs.owner }}
     steps:
-      - name: Checkout main branch to access local actions
-        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
-      - name: Set Environment Variables
-        uses: ./.github/actions/set-env-variables
-
       - name: Set up job variables
         id: vars
         run: |
@@ -152,7 +134,78 @@ jobs:
             SHA=${{ github.sha }}
             OWNER=${{ github.sha }}
           fi
+          echo sha=${SHA} >> $GITHUB_OUTPUT
+          echo owner=${OWNER} >> $GITHUB_OUTPUT
 
+      - name: Set commit status to pending
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+        with:
+          authToken: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ steps.vars.outputs.sha }}
+          context: ${{ github.workflow }}
+          description: Connectivity test in progress...
+          state: pending
+          target_url: ${{ env.check_url }}
+
+  skip-test-run:
+    # If the modified files are not relevant for this test then we can skip
+    # this test and mark it as successful.
+    if: github.event.comment.body == '/test' && needs.check_changes.outputs.tested == 'false'
+    runs-on: ubuntu-latest
+    needs: setup-report
+    name: Set commit status to success (skipped)
+    steps:
+      - name: Set commit status to success
+        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+        with:
+          authToken: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ needs.setup-report.outputs.sha }}
+          context: ${{ github.workflow }}
+          description: Connectivity test skipped
+          state: success
+          target_url: ${{ env.check_url }}
+
+  # This job is skipped when the workflow was triggered with the generic `/test`
+  # trigger if the only modified files were under `test/` or `Documentation/`.
+  installation-and-connectivity:
+    name: "Installation and Connectivity Test"
+    needs: [check_changes, setup-report]
+    if: |
+      (github.event_name == 'issue_comment' && (
+        github.event.comment.body == '/ci-aks' ||
+        (github.event.comment.body == '/test' && needs.check_changes.outputs.tested == 'true')
+      )) ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      job_name: "Installation and Connectivity Test"
+    strategy:
+      matrix:
+        k8s:
+        - version: 1.24
+          zone: westeurope
+        - version: 1.25
+          zone: westus
+        - version: 1.26
+          zone: japaneast
+        - version: 1.27
+          zone: eastus
+
+    steps:
+      - name: Checkout main branch to access local actions
+        uses: actions/checkout@8e5e7e5ab8b370d6c329ec480221332ada57f0ab # v3.5.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Set Environment Variables
+        uses: ./.github/actions/set-env-variables
+
+      - name: Set up job variables
+        id: vars
+        run: |
+          SHA="${{ needs.setup-report.outputs.sha }}"
           CILIUM_INSTALL_DEFAULTS="--cluster-name=${{ env.name }} \
             --chart-directory=install/kubernetes/cilium \
             --helm-set=image.repository=quay.io/${{ env.QUAY_ORGANIZATION_DEV }}/cilium-ci \
@@ -183,18 +236,6 @@ jobs:
           echo cilium_install_defaults=${CILIUM_INSTALL_DEFAULTS} >> $GITHUB_OUTPUT
           echo hubble_enable_defaults=${HUBBLE_ENABLE_DEFAULTS} >> $GITHUB_OUTPUT
           echo connectivity_test_defaults=${CONNECTIVITY_TEST_DEFAULTS} >> $GITHUB_OUTPUT
-          echo sha=${SHA} >> $GITHUB_OUTPUT
-          echo owner=${OWNER} >> $GITHUB_OUTPUT
-
-      - name: Set commit status to pending
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
-        with:
-          authToken: ${{ secrets.GITHUB_TOKEN }}
-          sha: ${{ steps.vars.outputs.sha }}
-          context: ${{ github.workflow }}
-          description: Connectivity test in progress...
-          state: pending
-          target_url: ${{ env.check_url }}
 
       - name: Install Cilium CLI
         uses: cilium/cilium-cli@d610d6e2774e29aef9565bad935e3b4943d541af # v0.14.5
@@ -219,24 +260,25 @@ jobs:
         run: |
           # Create group
           az group create \
-            --name ${{ env.name }} \
-            --location ${{ env.location }} \
+            --name ${{ env.name }}-${{ matrix.k8s.location }} \
+            --location ${{ matrix.k8s.location }} \
             --tags usage=${{ github.repository_owner }}-${{ github.event.repository.name }} owner=${{ steps.vars.outputs.owner }}
 
           # Create AKS cluster
           az aks create \
-            --resource-group ${{ env.name }} \
+            --resource-group ${{ env.name }}-${{ matrix.k8s.location }} \
             --name ${{ env.name }} \
-            --location ${{ env.location }} \
+            --location ${{ matrix.k8s.location }} \
             --network-plugin none \
             --node-count 2 \
             ${{ env.cost_reduction }} \
+            --kubernetes-version ${{ matrix.k8s.verion }} \
             --generate-ssh-keys
 
       - name: Get cluster credentials
         run: |
           az aks get-credentials \
-            --resource-group ${{ env.name }} \
+            --resource-group ${{ env.name }}-${{ matrix.k8s.location }} \
             --name ${{ env.name }}
 
       - name: Wait for images to be available
@@ -272,10 +314,10 @@ jobs:
         run: |
           mkdir -p cilium-junits
 
-      - name: Run connectivity test
+      - name: Run connectivity test ${{ matrix.k8s.verion }}
         run: |
           cilium connectivity test ${{ steps.vars.outputs.connectivity_test_defaults }} \
-          --junit-file "cilium-junits/${{ env.job_name }} - 1.xml" --junit-property github_job_step="Run connectivity test"
+          --junit-file "cilium-junits/${{ env.job_name }} - 1.xml" --junit-property github_job_step="Run connectivity test ${{ matrix.k8s.verion }}"
 
       - name: Clean up Cilium
         run: |
@@ -301,10 +343,10 @@ jobs:
           sleep 10s
           [[ $(pgrep -f "cilium.*hubble.*port-forward|kubectl.*port-forward.*hubble-relay" | wc -l) == 2 ]]
 
-      - name: Run connectivity test with IPSec
+      - name: Run connectivity test with IPSec ${{ matrix.k8s.verion }}
         run: |
           cilium connectivity test ${{ steps.vars.outputs.connectivity_test_defaults }} --force-deploy \
-          --junit-file "cilium-junits/${{ env.job_name }} - 2.xml" --junit-property github_job_step="Run connectivity test with IPSec"
+          --junit-file "cilium-junits/${{ env.job_name }} - 2.xml" --junit-property github_job_step="Run connectivity test with IPSec ${{ matrix.k8s.verion }}"
 
       - name: Post-test information gathering
         if: ${{ !success() }}
@@ -317,7 +359,7 @@ jobs:
       - name: Clean up AKS
         if: ${{ always() }}
         run: |
-          az group delete --name ${{ env.name }} --yes --no-wait
+          az group delete --name ${{ env.name }}-${{ matrix.k8s.location }} --yes --no-wait
         shell: bash {0} # Disable default fail-fast behaviour so that all commands run independently
 
       - name: Upload artifacts
@@ -353,23 +395,46 @@ jobs:
           state: success
           target_url: ${{ env.check_url }}
 
-      - name: Set commit status to failure
-        if: ${{ failure() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+  report-success:
+    runs-on: ubuntu-latest
+    needs: [setup-report, installation-and-connectivity]
+    name: Set commit status to success
+    if: ${{ success() }}
+    steps:
+      - uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
-          sha: ${{ steps.vars.outputs.sha }}
+          sha: ${{ needs.setup-report.outputs.sha }}
+          context: ${{ github.workflow }}
+          description: Connectivity test successful
+          state: success
+          target_url: ${{ env.check_url }}
+
+  report-failure:
+    runs-on: ubuntu-latest
+    needs: [setup-report, installation-and-connectivity]
+    name: Set commit status to failure
+    if: ${{ failure() }}
+    steps:
+      - uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+        with:
+          authToken: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ needs.setup-report.outputs.sha }}
           context: ${{ github.workflow }}
           description: Connectivity test failed
           state: failure
           target_url: ${{ env.check_url }}
 
-      - name: Set commit status to cancelled
-        if: ${{ cancelled() }}
-        uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
+  report-cancelled:
+    runs-on: ubuntu-latest
+    needs: [setup-report, installation-and-connectivity]
+    name: Set commit status to cancelled
+    if: ${{ cancelled() }}
+    steps:
+      - uses: Sibz/github-status-action@650dd1a882a76dbbbc4576fb5974b8d22f29847f # v1.1.6
         with:
           authToken: ${{ secrets.GITHUB_TOKEN }}
-          sha: ${{ steps.vars.outputs.sha }}
+          sha: ${{ needs.setup-report.outputs.sha }}
           context: ${{ github.workflow }}
           description: Connectivity test cancelled
           state: error
