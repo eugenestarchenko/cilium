@@ -66,7 +66,7 @@ concurrency:
 env:
   # renovate: datasource=github-releases depName=cilium/cilium-cli
   cilium_cli_version:
-  cilium_cli_ci_version: 3becbf29a44def5ef6adf3de7ebd7e18003f1f77
+  cilium_cli_ci_version: 4466e28482b0fddb9406c228e012a80ba0b5e303
   check_url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
 jobs:
@@ -564,24 +564,24 @@ jobs:
             ./cilium-cli status --wait
             kubectl -n kube-system exec daemonset/cilium -- cilium status
 
-            ./cilium-cli connectivity test --upgrade --upgrade-setup || true
-            ./cilium-cli connectivity test --test asdf || true
-            sleep 60
-
-            ./cilium-cli connectivity test --include-unsafe-tests --collect-sysdump-on-failure \
+            ./cilium-cli connectivity test --include-unsafe-tests --flush-ct --collect-sysdump-on-failure \
               --sysdump-hubble-flows-count=1000000 --sysdump-hubble-flows-timeout=5m \
               --sysdump-output-filename "cilium-sysdump-${{ matrix.name }}-<ts>"
+
+            ./cilium-cli connectivity test --upgrade --upgrade-setup --upgrade-test-file-path=/tmp/cilium-1
 
             CILIUM_CLI_MODE=helm ./cilium-cli upgrade --cluster-name=default ${{ steps.vars.outputs.cilium_install_defaults }}
 
             ./cilium-cli status --wait
             kubectl -n kube-system exec daemonset/cilium -- cilium status
 
-            ./cilium-cli connectivity test --include-unsafe-tests --collect-sysdump-on-failure \
+            ./cilium-cli connectivity test --include-unsafe-tests --upgrade --upgrade-test-file-path=/tmp/cilium-1 --collect-sysdump-on-failure \
               --sysdump-hubble-flows-count=1000000 --sysdump-hubble-flows-timeout=5m \
               --sysdump-output-filename "cilium-sysdump-${{ matrix.name }}-<ts>"
 
             if [ "${{ matrix.downgrade }}" != "false" ]; then
+
+            ./cilium-cli connectivity test --upgrade --upgrade-setup --upgrade-test-file-path=/tmp/cilium-2
 
             CILIUM_CLI_MODE=helm ./cilium-cli upgrade \
               --chart-directory=/host/v113/install/kubernetes/cilium \
@@ -591,7 +591,7 @@ jobs:
             ./cilium-cli status --wait
             kubectl -n kube-system exec daemonset/cilium -- cilium status
 
-            ./cilium-cli connectivity test --include-unsafe-tests --collect-sysdump-on-failure \
+            ./cilium-cli connectivity test --include-unsafe-tests --upgrade --upgrade-test-file-path=/tmp/cilium-2 --collect-sysdump-on-failure \
               --sysdump-hubble-flows-count=1000000 --sysdump-hubble-flows-timeout=5m \
               --sysdump-output-filename "cilium-sysdump-${{ matrix.name }}-<ts>"
 
